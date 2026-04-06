@@ -1,0 +1,244 @@
+---
+title: "Supplementary Figure 1B, SpatialPCA Results"
+output: html_document
+---
+
+The following analysis uses Visium V2 data from Sample P2 in the paper [High-definition spatial transcriptomic profiling of immune cell populations in colorectal cancer](https://doi.org/10.1038/s41588-025-02193-3).
+
+```{r, load-libraries, warning=FALSE, results="hide"}
+library(rhdf5)
+
+library(ggplot2)
+library(fs)
+library(glue)
+
+library(SpatialPCA)
+```
+
+## Load the processed Data
+
+```{r, define-helper-meta, include=FALSE}
+# Helpers
+read_h5ad_meta <- function(file, name='/obs'){
+  cd <- rhdf5::h5read(file, name)
+  
+  
+  cd <- purrr::map(cd, \(l) {
+    if(is.list(l)) {
+      cats <- l$categories
+      codes <- l$codes + 1
+      codes <- ifelse(codes == 0, NA, codes)
+      
+      out <- cats[codes]
+    } else {
+      out <- l
+    }
+    out
+  })
+  
+  out <- data.frame(cd)
+  out['index'] <- cd[['_index']]
+  rownames(out) <- cd[['_index']]
+  
+  if (name == "/obs") {
+    try({
+    spc <- rhdf5::h5read(file, '/obsm/spatial')
+    spc <- t(spc)
+    
+    out['Y'] = spc[,2]
+    out['X'] = spc[,1]
+  }, silent = TRUE
+  )
+  
+
+  if ("in_tissue" %in% names(cd)) out[["in_tissue"]] <- as.logical(cd$in_tissue)
+  if ("array_col" %in% names(cd)) {
+    out[['array_col']] <- cd$array_col
+    out[["array_row"]] <- cd$array_row
+  }
+  
+  } else if(name == "/var") {
+    if ("gene_ids" %in% names(cd)) out[['Symbol']] <- cd$gene_ids
+  }
+  
+  out
+}
+```
+
+```{r, define-helper-mtx, include=FALSE}
+read_h5ad_matrix <- function(file) {
+  
+ #  mtx <- rhdf5::h5read(file,'/')
+  X_ <- rhdf5::h5read(file,'/X')
+  
+  obs_names = rhdf5::h5read(file,'/obs/_index')
+  var_names <- rhdf5::h5read(file,'/var/_index')
+  
+  obs_names <- as.vector(obs_names)
+  var_names <- as.vector(var_names)
+  
+  if (is.list(X_)) {
+    
+    counts <- Matrix::sparseMatrix(
+      i = X_$indices,
+      p = X_$indptr,
+      x = as.vector(X_$data),
+      index1=FALSE
+    )
+    
+  } else {
+    counts <- Matrix(
+      X_, 
+      sparse=TRUE,
+    )
+  }
+  
+  dim_mtx <- dim(counts)
+  message(
+    paste('The count matrix has dimensions ', dim_mtx[1], 'x', dim_mtx[2])
+  )
+  
+  if (length(obs_names) == dim_mtx[1]) {
+    
+    
+    rownames(counts) <- obs_names
+    colnames(counts) <- var_names
+    
+    print("Genes are on the columns. Transposing.... ")
+    counts <- t(counts)
+  } else {
+    
+    rownames(counts) <- var_names
+    colnames(counts) <- obs_names
+  }
+  
+  counts
+}
+```
+
+```{r define-paths,include=FALSE}
+pth_proc_adata <- "../data/Visium_V2_P2CRC/visium_p2crc_processed.h5ad"
+```
+
+Load the processed Visium data used in Figure 1.
+
+```{r, load-data, include=TRUE, tidy=TRUE}
+
+counts <- read_h5ad_matrix(pth_proc_adata)
+var <- read_h5ad_meta(pth_proc_adata,"/var")
+obs <- read_h5ad_meta(pth_proc_adata,"/obs")
+
+nobs <- nrow(obs)
+  if (which(dim(counts) == nobs) == 1L) {
+    counts <- t(counts)
+  }
+```
+
+Use same genes as in Figure 1
+
+```{r, load-genes, message=FALSE}
+# genes3k <- read_csv("../data/visium_genes3k.csv")
+genes3k <- readr::read_csv("../../visium_genes3k.csv", col_names=F, col_select=1)
+genes3k <- genes3k$X1
+```
+
+## Define spatialPCA object
+
+```{r, spca-init}
+spa <- new("SpatialPCA")
+spa@counts <- counts[genes3k,]
+spa@normalized_expr <- as.matrix(spa@counts)
+spa@location <- as.matrix(obs[,c("X","Y")])
+```
+
+## Run spatial PCA
+
+First, compute kernel
+
+```{r, spca-kernel}
+spa <- SpatialPCA_buildKernel(
+  spa,
+  sparseKernel = TRUE
+)
+```
+
+Now, run method
+
+```{r, spca-est-loading}
+spa <- SpatialPCA_EstimateLoading(
+  spa, fast=TRUE, SpatialPCnum=20)
+
+spa <- SpatialPCA_SpatialPCs(spa, fast=TRUE)
+```
+
+Aggregate results for plotting
+
+```{r, agg-results,include=TRUE}
+spcs <- t(spa@SpatialPCs)
+colnames(spcs) <- paste0("spc_r",seq(20))
+obs <- cbind(obs, spcs)
+```
+
+```{r, plot-helpers, include=FALSE}
+THEME_DEFAULT_LIST <- list(
+  line = element_line(colour = "black", linewidth = 1,
+           linetype = 1, lineend = "square"),
+  rect = element_rect(fill = NA, colour = "black",
+           linewidth = 1, linetype = 1),
+  
+  aspect.ratio = 1/1.15,
+  
+  panel.background = element_blank(),
+  panel.border = element_blank(),
+  panel.grid = element_blank(),
+  panel.spacing = ggplot2::unit(0, "pt"),
+  
+  plot.background = element_blank(),
+  plot.title = element_text(
+    hjust=0.5, vjust=0.5, family="Helvetica",face="bold",size=14),
+  
+  axis.line = element_blank(),
+  axis.title = element_blank(),
+  axis.text = element_blank(),
+  axis.ticks = element_blank(),
+  
+  legend.position = "none"
+)
+
+theme_krpca <- function(...) {
+  do.call(theme, THEME_DEFAULT_LIST) +
+  theme(...)
+}
+
+```
+
+Plot results
+
+```{r, plot-results}
+# Update for each spatial PC
+pl_obs <- obs |>
+  dplyr::select(X, Y, spc_r1:spc_r3) |>
+  tidyr::pivot_longer(
+    contains("spc"),
+    names_to = "component", 
+    values_to = "score"
+  )
+
+ggplot(pl_obs, aes(X,-1*Y, color=score)) +
+    geom_point(size=rel(0.25), alpha=0.90) +
+    facet_wrap(~ component) +
+    scale_x_continuous(expand=c(0.03,0.03)) +
+    scale_y_continuous(expand=c(0.03,0.03)) +
+    scico::scale_color_scico(
+      breaks = function(x) range(x),
+      labels = c("Low", "High"),
+      palette = 'vikO', direction=1,
+    ) +
+  theme_krpca()
+```
+
+## Session information
+
+```{r, info}
+sessionInfo()
+```
