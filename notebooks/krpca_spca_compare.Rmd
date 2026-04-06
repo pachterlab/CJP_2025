@@ -138,7 +138,6 @@ Use same genes as in Figure 1
 
 ```{r, load-genes, message=FALSE}
 # genes3k <- read_csv("../data/visium_genes3k.csv")
-genes3k <- readr::read_csv("../../visium_genes3k.csv", col_names=F, col_select=1)
 genes3k <- genes3k$X1
 ```
 
