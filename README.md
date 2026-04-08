@@ -1,4 +1,4 @@
-A repository to recreate the figures in the following manuscripts: 
+This repository contains the code to reproduce the results and figures in the following manuscripts: 
 
 
 ```bibtex
